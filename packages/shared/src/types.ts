@@ -1,7 +1,11 @@
+export type Platform = "google_search" | "google_maps" | "instagram" | "linkedin";
+
+export type TargetType = "person" | "company";
+
 export type Lead = {
   id: string;
-  type: "person" | "company";
-  platform: "google" | "maps" | "instagram" | "linkedin" | "website";
+  type: TargetType;
+  platform: Platform;
   name?: string;
   username?: string;
   description?: string;
@@ -20,11 +24,17 @@ export type Lead = {
 
 export type SearchInput = {
   query: string;
-  targetType: "person" | "company";
-  platform: "google" | "maps" | "instagram" | "linkedin";
   location?: string;
+  targetType: TargetType;
+  platforms: Platform[];
+};
+
+export type ProviderError = {
+  platform: Platform;
+  message: string;
 };
 
 export type SearchResponse = {
   results: Lead[];
+  errors: ProviderError[];
 };

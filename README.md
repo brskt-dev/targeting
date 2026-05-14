@@ -2,7 +2,7 @@
 
 Motor de descoberta de leads/targets para prospecção B2B e B2C.
 
-Encontre empresas, pessoas e perfis públicos via Google Search e Google Maps — com exportação CSV.
+Busca simultânea em múltiplas plataformas: Google Search, Google Maps, Instagram e LinkedIn — com exportação CSV.
 
 ---
 
@@ -27,14 +27,36 @@ Encontre empresas, pessoas e perfis públicos via Google Search e Google Maps �
   /api        → Fastify (porta 3001)
 
 /packages
-  /shared     → tipos Lead, SearchInput, SearchResponse
-  /scrapers   → providers de scraping (google, maps)
+  /shared     → tipos Lead, SearchInput, SearchResponse, ProviderError
+  /scrapers   → registry de providers + implementações
 ```
 
-**Fluxo:**
+### Multi-provider
+
 ```
-Usuário → web (formulário) → POST /search → api → scrapers → Lead[] → tabela + CSV
+Usuário seleciona plataformas [A, B, C]
+         ↓
+API recebe POST /search { platforms: ["google_maps", "instagram"] }
+         ↓
+Promise.allSettled([providerA.search(), providerB.search()])
+         ↓
+{ results: Lead[], errors: ProviderError[] }
+         ↓
+Tabela consolida todos os resultados + aviso se algum provider falhou
 ```
+
+Cada provider é independente. Falha de um não cancela os demais.
+
+### Providers disponíveis
+
+| Platform | Estratégia |
+|---|---|
+| `google_search` | Google Search direto via Playwright |
+| `google_maps` | Google Maps via Playwright |
+| `instagram` | Google `site:instagram.com` search (sem auth) |
+| `linkedin` | Google `site:linkedin.com/company` ou `/in` (sem auth) |
+
+> Instagram e LinkedIn usam Google como proxy de busca para evitar autenticação.
 
 ---
 
@@ -44,7 +66,6 @@ Usuário → web (formulário) → POST /search → api → scrapers → Lead[] 
 
 - Node.js 20+
 - pnpm 9+
-- Docker + Docker Compose (para rodar em container)
 
 ### Desenvolvimento local
 
@@ -52,7 +73,7 @@ Usuário → web (formulário) → POST /search → api → scrapers → Lead[] 
 # Instalar dependências
 pnpm install
 
-# Instalar browsers do Playwright
+# Instalar browser do Playwright
 pnpm --filter @targeting/scrapers exec playwright install chromium
 
 # Rodar tudo (web + api)
@@ -80,8 +101,8 @@ curl -X POST http://localhost:3001/search \
   -d '{
     "query": "clínicas de estética",
     "location": "Campinas",
-    "platform": "maps",
-    "targetType": "company"
+    "targetType": "company",
+    "platforms": ["google_maps", "instagram"]
   }'
 ```
 
@@ -92,22 +113,25 @@ curl -X POST http://localhost:3001/search \
     {
       "id": "uuid",
       "type": "company",
-      "platform": "maps",
+      "platform": "google_maps",
       "name": "Clínica X",
       "location": "Campinas, SP",
-      "website": "https://...",
       "sourceUrl": "https://maps.google.com/...",
       "contact": { "phone": "(19) 99999-9999" }
+    }
+  ],
+  "errors": [
+    {
+      "platform": "instagram",
+      "message": "timeout"
     }
   ]
 }
 ```
 
-**Plataformas suportadas:**
-- `google` — Google Search
-- `maps` — Google Maps
+**Campos obrigatórios:** `query`, `targetType`, `platforms` (array não vazio)
 
-**Campos obrigatórios:** `query`, `targetType`, `platform`
+**Plataformas válidas:** `google_search`, `google_maps`, `instagram`, `linkedin`
 
 ### GET /health
 
@@ -121,25 +145,48 @@ curl http://localhost:3001/health
 ## Estrutura de dados
 
 ```ts
-type Lead = {
-  id: string;
-  type: "person" | "company";
-  platform: "google" | "maps" | "instagram" | "linkedin" | "website";
-  name?: string;
-  description?: string;
-  website?: string;
-  sourceUrl: string;
+type Platform = "google_search" | "google_maps" | "instagram" | "linkedin";
+
+type SearchInput = {
+  query: string;
   location?: string;
-  contact?: { email?: string; phone?: string; whatsapp?: string };
+  targetType: "person" | "company";
+  platforms: Platform[];        // array multi-plataforma
+};
+
+type SearchResponse = {
+  results: Lead[];
+  errors: ProviderError[];      // providers que falharam, se houver
 };
 ```
 
 ---
 
+## Adicionando um novo provider
+
+1. Criar `packages/scrapers/src/providers/meu-provider.provider.ts`:
+
+```ts
+import type { ScraperProvider } from "../types";
+
+export const meuProvider: ScraperProvider = {
+  platform: "minha_plataforma",
+  async search(input) {
+    // ... scraping aqui
+    return leads;
+  },
+};
+```
+
+2. Adicionar ao tipo `Platform` em `packages/shared/src/types.ts`
+3. Registrar em `packages/scrapers/src/providers/index.ts`
+
+---
+
 ## Próximos passos
 
-- [ ] Provider Instagram (perfis públicos)
-- [ ] Provider LinkedIn (limitado a dados públicos)
+- [ ] Melhorar scraping direto do Instagram (explore/hashtags públicos)
+- [ ] Melhorar scraping do LinkedIn (páginas públicas de company)
 - [ ] Filtros avançados (segmento, tamanho, etc.)
 - [ ] Score de relevância por lead
 - [ ] Paginação de resultados

@@ -1,8 +1,9 @@
 import { chromium } from "playwright";
 import type { Lead, SearchInput } from "@targeting/shared";
+import type { ScraperProvider } from "../types";
 import { randomUUID } from "crypto";
 
-export async function mapsProvider(input: SearchInput): Promise<Lead[]> {
+async function search(input: SearchInput): Promise<Lead[]> {
   const query = input.location ? `${input.query} ${input.location}` : input.query;
   const searchUrl = `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
 
@@ -20,16 +21,11 @@ export async function mapsProvider(input: SearchInput): Promise<Lead[]> {
         address: string;
         phone: string;
         website: string;
-        sourceUrl: string;
+        url: string;
       }> = [];
 
-      const cards = document.querySelectorAll('[role="article"]');
-
-      cards.forEach((card) => {
+      document.querySelectorAll('[role="article"]').forEach((card) => {
         const nameEl = card.querySelector(".qBF1Pd, .fontHeadlineSmall");
-        const addressEl = card.querySelector(".W4Efsd:nth-child(2) .W4Efsd span");
-        const phoneEl = card.querySelector('[data-dtype="d3ph"]');
-        const websiteEl = card.querySelector('a[data-value="Website"]');
         const linkEl = card.querySelector("a.hfpxzc");
 
         if (!nameEl) return;
@@ -37,10 +33,10 @@ export async function mapsProvider(input: SearchInput): Promise<Lead[]> {
         items.push({
           name: nameEl.textContent?.trim() ?? "",
           description: card.querySelector(".W4Efsd")?.textContent?.trim() ?? "",
-          address: addressEl?.textContent?.trim() ?? "",
-          phone: phoneEl?.textContent?.trim() ?? "",
-          website: (websiteEl as HTMLAnchorElement)?.href ?? "",
-          sourceUrl: (linkEl as HTMLAnchorElement)?.href ?? searchUrl,
+          address: card.querySelector(".W4Efsd:nth-child(2) .W4Efsd span")?.textContent?.trim() ?? "",
+          phone: card.querySelector('[data-dtype="d3ph"]')?.textContent?.trim() ?? "",
+          website: (card.querySelector('a[data-value="Website"]') as HTMLAnchorElement)?.href ?? "",
+          url: (linkEl as HTMLAnchorElement)?.href ?? searchUrl,
         });
       });
 
@@ -50,12 +46,12 @@ export async function mapsProvider(input: SearchInput): Promise<Lead[]> {
     return results.map((r) => ({
       id: randomUUID(),
       type: input.targetType,
-      platform: "maps" as const,
+      platform: "google_maps" as const,
       name: r.name,
       description: r.description,
       website: r.website || undefined,
-      profileUrl: r.sourceUrl,
-      sourceUrl: r.sourceUrl,
+      profileUrl: r.url,
+      sourceUrl: r.url,
       location: r.address || input.location,
       contact: {
         phone: r.phone || undefined,
@@ -65,3 +61,8 @@ export async function mapsProvider(input: SearchInput): Promise<Lead[]> {
     await browser.close();
   }
 }
+
+export const googleMapsProvider: ScraperProvider = {
+  platform: "google_maps",
+  search,
+};
