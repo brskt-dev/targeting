@@ -2,6 +2,8 @@ export type Platform = "google_search" | "google_maps" | "instagram" | "linkedin
 
 export type TargetType = "person" | "company";
 
+export type ScrapeEffort = "fast" | "balanced" | "deep";
+
 export type Lead = {
   id: string;
   type: TargetType;
@@ -27,6 +29,7 @@ export type SearchInput = {
   location?: string;
   targetType: TargetType;
   platforms: Platform[];
+  scrapeEffort?: ScrapeEffort;
 };
 
 export type ProviderError = {
