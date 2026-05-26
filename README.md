@@ -1,8 +1,27 @@
 # Targeting
 
-Motor de descoberta de leads/targets para prospecção B2B e B2C.
+**Agente local-first para extrair leads de plataformas web autenticadas.**
 
-Busca simultânea em múltiplas plataformas: Google Search, Google Maps, Instagram e LinkedIn — com exportação CSV.
+O Targeting conecta-se a sistemas onde **você já tem acesso legítimo** — qualquer CRM, ERP, painel administrativo ou plataforma web — observa o ambiente com browser automation + LLM, extrai contatos/dados e responde prompts em linguagem natural do tipo *"monte uma lista de clientes que pediram orçamento e não fecharam"*.
+
+UI dark, estilo chat. Eventos do agente aparecem como mensagens. Toggle "Dev" no topo direito mostra logs raw, run state e tabela de contatos para debug.
+
+---
+
+## O que ele faz
+
+1. Você cadastra uma **plataforma** com URL, descrição, dicas de onde estão os dados e peculiaridades conhecidas. Esse contexto é injetado direto no system prompt do LLM.
+2. O Targeting abre um **browser persistente local**. Você faz login manualmente — o app não pede nem guarda senha.
+3. Você escreve em linguagem natural o que quer extrair (com instruções detalhadas opcionais).
+4. O agente navega em modo *read-only*, observa páginas, opcionalmente envia screenshots ao LLM (modo Vision), e persiste contatos/evidências localmente em JSONL.
+5. Depois você pode escrever **prompts pós-scan** para gerar listas filtradas, exportáveis em CSV.
+
+### Princípio de acesso
+
+- O Targeting **só trabalha com dados acessíveis à conta autenticada** pelo usuário.
+- Não automatiza login com credenciais digitadas no app.
+- Não tenta burlar captcha, MFA, challenge, bloqueio.
+- **Não envia mensagens, não cria/edita/deleta dados, não submete formulários que persistam mudanças.** Apenas lê e filtra.
 
 ---
 
@@ -11,108 +30,80 @@ Busca simultânea em múltiplas plataformas: Google Search, Google Maps, Instagr
 | Camada | Tecnologia |
 |---|---|
 | Monorepo | Turborepo + pnpm workspaces |
-| Frontend | Next.js 14 (App Router) + Tailwind + shadcn/ui |
-| Backend | Node.js + Fastify |
-| Scraping | Playwright |
-| Tipos | TypeScript compartilhado |
-| Infra local | Docker + Docker Compose |
+| Frontend | Next.js 14 (App Router) + Tailwind, tema dark |
+| Backend | Node.js + Fastify (SSE de eventos do agente) |
+| Browser | Playwright (contexto persistente por conexão) |
+| Persistência | JSONL append-only em `~/.targeting/` |
+| LLM | OpenAI via `OPENAI_API_KEY` (default `gpt-4o-mini`). Suporta vision. |
 
 ---
 
 ## Arquitetura
 
 ```
-/apps
-  /web        → Next.js (porta 3000)
-  /api        → Fastify (porta 3001)
+apps/
+  api/                  Fastify: /connections, /scan, /lead-query, /events (SSE), /export
+  web/                  Next.js: dashboard chat-like + dev panel
 
-/packages
-  /shared     → tipos Lead, SearchInput, SearchResponse, ProviderError, ScrapeEffort
-  /scrapers   → registry de providers + pipeline de qualidade
-    src/
-      providers/          → google-search, google-maps, instagram, linkedin
-      filters/            → profile-filter, location-filter, pipeline principal
-      utils/              → google-search-runner (compartilhado)
-      query-builder.ts    → queries por platform + targetType + scrapeEffort
-      scorer.ts           → score por targetType
+packages/
+  shared/               Tipos centrais (PlatformConnection, ScanRun, ContactCandidate, ...)
+  storage/              JSONL stores + dedupe (contacts por telefone/nome)
+  extractors/           Regex: email, phone, whatsapp, url, date, currency, message-intent
+  agent/
+    browser-agent.ts    Playwright headed + pool por conexão
+    page-observer.ts    DOM compactado + listas virtuais + ícones
+    task-runner.ts      Loop observe → plan → act, com stagnation guard
+    guardrails.ts       Bloqueia ações mutativas
+    llm-provider.ts     Abstração de LLM
+    prompts/            Prompts organizados (plan-task, extract-data, etc.)
+    providers/
+      openai-llm.ts     OpenAI chat-completions com suporte a vision
+  connectors/
+    custom-web/         Único connector: qualquer sistema web autenticado
 ```
 
-### Pipeline de coleta e qualidade
+### Fluxo
 
 ```
-Usuário define: query + location + targetType + platforms + scrapeEffort
-         ↓
-API POST /search
-         ↓
-query-builder → queries específicas por (platform, targetType, scrapeEffort)
-         ↓
-Promise.allSettled([providerA, providerB, ...])  ← paralelo, falha isolada
-         ↓
-applyPostProcessing(raw, input):
-  1. profile-filter → rejeita notícias, artigos, PDFs, vagas, sites acadêmicos
-  2. scorer         → score 0–100 por targetType
-  3. location-filter → ajuste ±20 por match de localização (token exato)
-  4. profile bonus  → +15 para plataformas de perfil conhecidas
-  5. dedup          → remove duplicatas por URL normalizada
-  6. threshold      → descarta score ≤ 5, ordena desc
-         ↓
-{ results: Lead[], errors: ProviderError[] }
+Conexão (manual login)
+   │
+   ▼
+Scan (objetivo + instruções + depth + vision)
+   │
+   ▼
+Loop: observar → planejar (LLM) → agir → observar
+   │
+   ▼
+Extração incremental (LLM) → JSONL + dedupe
+   │
+   ▼
+Lead query pós-scan (LLM filtra dados coletados) → CSV
 ```
 
-**Regra de produto: conteúdo não é lead.** Apenas perfis, negócios e contatos potenciais passam pelo filtro.
+---
 
-Cada provider é independente — falha de um não cancela os demais.
+## UI
 
-### Estratégia B2B vs B2C
+**Modo amigável (default):** sidebar com conexões à esquerda, chat na direita. Cada evento do agente vira uma mensagem com ícone (login, scan, plano, ação, contato, etc.). Composer no rodapé pra iniciar novos scans com objetivo + instruções detalhadas + depth + toggle vision.
 
-#### Queries por `targetType` e `scrapeEffort`
+**Modo dev:** toggle no topo direito mostra JSON cru da conexão, do run, logs SSE em fonte mono, e tabela de contatos brutos.
 
-**`targetType: "company"`**
+---
 
-| Platform | Query |
-|---|---|
-| `google_search` | `{query} {local}` |
-| `google_maps` | `{query} {local}` |
-| `instagram` | `site:instagram.com {query} {local}` |
-| `linkedin` | `site:linkedin.com/company {query} {local}` |
+## Como ajudar o LLM a acertar o alvo
 
-**`targetType: "person"` — as queries mudam com o esforço**
+Quanto mais contexto, melhor. Ao criar/editar uma plataforma você pode preencher:
 
-| Esforço | google_search retorna |
-|---|---|
-| `fast` | `site:linkedin.com/in "{query}" "{local}"` |
-| `balanced` | LinkedIn /in + broad com exclusões (-vagas -empresa -ltda ...) |
-| `deep` | LinkedIn /in + broad + Instagram + GitHub |
+- **Descrição da plataforma** — que tipo de sistema é, módulos do menu, fluxo geral.
+- **Onde estão os dados de interesse** — caminho mental para o agente seguir.
+- **Peculiaridades** — quirks comportamentais (ex: "lista só recarrega após Buscar", "filtros submetam via Enter").
 
-Instagram e LinkedIn sempre usam `site:` específico + targetType (`/in` vs `/company`).  
-Google Maps retorna vazio para `person` — Maps é de locais/negócios.
+E ao iniciar um scan você tem:
 
-#### Filtros de qualidade
-
-`filters/profile-filter.ts` — **hard reject** para não-contatos:
-- Domínios bloqueados: G1, UOL, Estadão, Scielo, Glassdoor, Indeed, YouTube etc.
-- Path patterns: `/noticias/`, `/artigo/`, `/blog/`, `/vagas/`, `.pdf`, `/wiki/` etc.
-- Para person: rejeita `linkedin.com/company/`, `linkedin.com/jobs/`, `linkedin.com/pulse/`
-
-`filters/location-filter.ts` — **match por token exato** (±20 no score):
-- "americana" ≠ "americas", "american", "latin america"
-- Normaliza acentos, separa tokens, exige igualdade estrita
-- Não hard-rejeita perfis sem localização (muitos não expõem)
-
-`scorer.ts` — **sinais positivos/negativos** por `targetType`:
-- Person sobe com: `linkedin.com/in/`, `github.com/`, `portfólio`, `freelancer`, `developer`
-- Person desce com: `ltda`, `vagas`, `campeonato`, `esports`, `americas`, `organização`
-
-### Providers disponíveis
-
-| Platform | Estratégia |
-|---|---|
-| `google_search` | Google Search via Playwright |
-| `google_maps` | Google Maps via Playwright (company only) |
-| `instagram` | Google `site:instagram.com` search (sem auth) |
-| `linkedin` | Google `site:linkedin.com/in` ou `/company` (sem auth) |
-
-> Instagram e LinkedIn usam Google como proxy de busca para evitar autenticação.
+- **Objetivo** (curto) — o quê.
+- **Instruções detalhadas** (opcional, no expansor "+") — o como, intervalo de datas, abas a usar/evitar, etc.
+- **Depth** — fast (8 iterações), balanced (18), deep (35), brutal (70).
+- **Vision toggle** — envia screenshots ao LLM em cada plano. Custa mais tokens, mas ajuda muito quando o DOM compactado esconde info visual (ex: cor de status, ícones ambíguos). Ligado por padrão; sempre ativa em estagnação.
 
 ---
 
@@ -123,131 +114,95 @@ Google Maps retorna vazio para `person` — Maps é de locais/negócios.
 - Node.js 20+
 - pnpm 9+
 
-### Desenvolvimento local
+### Setup
 
 ```bash
-# Instalar dependências
 pnpm install
-
-# Instalar browser do Playwright
-pnpm --filter @targeting/scrapers exec playwright install chromium
-
-# Rodar tudo (web + api)
+pnpm --filter @targeting/agent exec playwright install chromium
+cp .env.example .env       # edite .env e cole sua OPENAI_API_KEY
 pnpm dev
 ```
 
 - Web: http://localhost:3000
 - API: http://localhost:3001
 
-### Via Docker
+### Variáveis de ambiente
 
-```bash
-docker compose up --build
-```
+| Variável | Obrigatório | Default | Descrição |
+|---|---|---|---|
+| `OPENAI_API_KEY` | sim | — | Chave da OpenAI. Fica só no backend. |
+| `OPENAI_MODEL` | não | `gpt-4o-mini` | Modelo OpenAI usado. |
+| `TARGETING_DATA_DIR` | não | `~/.targeting` | Diretório para JSONL e perfis de browser. |
+| `CORS_ORIGIN` | não | `*` | Origem CORS aceita pela API. |
+| `PORT` / `HOST` | não | `3001` / `0.0.0.0` | Porta e host da API. |
+| `NEXT_PUBLIC_API_URL` | não | `http://localhost:3001` | URL da API usada pelo web. |
+
+---
+
+## Persistência
+
+Tudo em `~/.targeting/` (ou `TARGETING_DATA_DIR`):
+
+- `connections.jsonl`
+- `runs.jsonl`
+- `contacts.jsonl` (dedup automático por telefone, ou por nome quando ninguém tem telefone)
+- `evidence.jsonl`
+- `lead-lists.jsonl`
+- `agent-logs.jsonl`
+- `browser-profiles/<connectionId>/` — userDataDir do Playwright
 
 ---
 
 ## API
 
-### POST /search
-
-```bash
-curl -X POST http://localhost:3001/search \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "clínicas de estética",
-    "location": "Campinas",
-    "targetType": "company",
-    "platforms": ["google_maps", "instagram"],
-    "scrapeEffort": "balanced"
-  }'
+### Conexões
+```
+GET    /connections
+POST   /connections                       { name, loginUrl, platformDescription?, dataLocations?, knownQuirks? }
+PATCH  /connections/:id                   { name?, loginUrl?, platformDescription?, dataLocations?, knownQuirks? }
+DELETE /connections/:id
+POST   /connections/:id/connect           abre browser, aguarda login manual
+POST   /connections/:id/mark-connected    força status connected (override)
+POST   /connections/:id/open              só abre o browser
+POST   /connections/:id/close             fecha contexto do browser
+POST   /connections/:id/scan              { objective, richInstructions?, depth, useVision? }
 ```
 
-**`scrapeEffort`** (opcional, padrão `"balanced"`): `"fast"` | `"balanced"` | `"deep"`
-
-**Resposta:**
-```json
-{
-  "results": [
-    {
-      "id": "uuid",
-      "type": "company",
-      "platform": "google_maps",
-      "name": "Clínica X",
-      "location": "Campinas, SP",
-      "sourceUrl": "https://maps.google.com/...",
-      "contact": { "phone": "(19) 99999-9999" }
-    }
-  ],
-  "errors": [
-    {
-      "platform": "instagram",
-      "message": "timeout"
-    }
-  ]
-}
+### Runs / dados
+```
+GET    /runs?connectionId=...
+GET    /runs/:id
+POST   /runs/:id/cancel
+GET    /contacts?runId=...|connectionId=...
+GET    /evidence
+GET    /logs?runId=...
+GET    /lead-lists
 ```
 
-**Campos obrigatórios:** `query`, `targetType`, `platforms` (array não vazio)
-
-**Plataformas válidas:** `google_search`, `google_maps`, `instagram`, `linkedin`
-
-### GET /health
-
-```bash
-curl http://localhost:3001/health
-# { "status": "ok" }
+### Lead query / export / SSE
+```
+POST   /lead-query                        { prompt, runIds?, connectionIds? }
+GET    /export/contacts.csv?runId=...
+GET    /export/lead-lists/:id.csv
+GET    /events?connectionId=...&runId=... SSE de AgentLog
 ```
 
 ---
 
-## Estrutura de dados
+## Prompts
 
-```ts
-type Platform = "google_search" | "google_maps" | "instagram" | "linkedin";
+Toda string de prompt vive em [packages/agent/src/prompts/](packages/agent/src/prompts/), separada do código:
 
-type SearchInput = {
-  query: string;
-  location?: string;
-  targetType: "person" | "company";
-  platforms: Platform[];        // array multi-plataforma
-};
+- `shared.ts` — regras genéricas (safety, schema, selectors, feedback loop, exploration, raciocínio temporal)
+- `plan-task.ts` — system prompt do planner. Compõe regras + contexto da conexão + instruções do usuário.
+- `extract-data.ts` — extração de dados estruturados.
+- `interpret-page.ts` — classificação rápida da tela.
+- `answer-lead-query.ts` — lead query pós-scan.
 
-type SearchResponse = {
-  results: Lead[];
-  errors: ProviderError[];      // providers que falharam, se houver
-};
-```
+As regras são **genéricas** — qualquer convenção específica de uma plataforma sua vira contexto que o próprio usuário fornece na conexão (`platformDescription`, `dataLocations`, `knownQuirks`).
 
 ---
 
-## Adicionando um novo provider
+## Legacy
 
-1. Criar `packages/scrapers/src/providers/meu-provider.provider.ts`:
-
-```ts
-import type { ScraperProvider } from "../types";
-
-export const meuProvider: ScraperProvider = {
-  platform: "minha_plataforma",
-  async search(input) {
-    // ... scraping aqui
-    return leads;
-  },
-};
-```
-
-2. Adicionar ao tipo `Platform` em `packages/shared/src/types.ts`
-3. Registrar em `packages/scrapers/src/providers/index.ts`
-
----
-
-## Próximos passos
-
-- [ ] Melhorar scraping direto do Instagram (explore/hashtags públicos)
-- [ ] Melhorar scraping do LinkedIn (páginas públicas de company)
-- [ ] Filtros avançados (segmento, tamanho, etc.)
-- [ ] Score de relevância por lead
-- [ ] Paginação de resultados
-- [ ] Persistência opcional (SQLite)
-- [ ] Autenticação simples
+O código antigo de scraping público está em `packages/scrapers` mas não é wirado por padrão. `POST /search` na API responde 410. Os tipos antigos seguem disponíveis em `@targeting/shared/Legacy` (namespace) caso queira referenciar.

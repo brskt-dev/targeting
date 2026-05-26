@@ -32,12 +32,24 @@ importers:
       '@fastify/cors':
         specifier: ^9.0.1
         version: 9.0.1
-      '@targeting/scrapers':
+      '@targeting/agent':
         specifier: workspace:*
-        version: link:../../packages/scrapers
+        version: link:../../packages/agent
+      '@targeting/connectors':
+        specifier: workspace:*
+        version: link:../../packages/connectors
+      '@targeting/extractors':
+        specifier: workspace:*
+        version: link:../../packages/extractors
       '@targeting/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@targeting/storage':
+        specifier: workspace:*
+        version: link:../../packages/storage
+      dotenv:
+        specifier: ^16.4.5
+        version: 16.6.1
       fastify:
         specifier: ^4.27.0
         version: 4.29.1
@@ -101,6 +113,59 @@ importers:
         specifier: ^5.4.5
         version: 5.9.3
 
+  packages/agent:
+    dependencies:
+      '@targeting/extractors':
+        specifier: workspace:*
+        version: link:../extractors
+      '@targeting/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@targeting/storage':
+        specifier: workspace:*
+        version: link:../storage
+      playwright:
+        specifier: ^1.43.1
+        version: 1.60.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.12.7
+        version: 20.19.41
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+
+  packages/connectors:
+    dependencies:
+      '@targeting/agent':
+        specifier: workspace:*
+        version: link:../agent
+      '@targeting/extractors':
+        specifier: workspace:*
+        version: link:../extractors
+      '@targeting/shared':
+        specifier: workspace:*
+        version: link:../shared
+      '@targeting/storage':
+        specifier: workspace:*
+        version: link:../storage
+      playwright:
+        specifier: ^1.43.1
+        version: 1.60.0
+    devDependencies:
+      '@types/node':
+        specifier: ^20.12.7
+        version: 20.19.41
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+
+  packages/extractors:
+    devDependencies:
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
+
   packages/scrapers:
     dependencies:
       '@targeting/shared':
@@ -115,6 +180,19 @@ importers:
         version: 5.9.3
 
   packages/shared: {}
+
+  packages/storage:
+    dependencies:
+      '@targeting/shared':
+        specifier: workspace:*
+        version: link:../shared
+    devDependencies:
+      '@types/node':
+        specifier: ^20.12.7
+        version: 20.19.41
+      typescript:
+        specifier: ^5.4.5
+        version: 5.9.3
 
 packages:
 
@@ -709,6 +787,10 @@ packages:
   doctrine@3.0.0:
     resolution: {integrity: sha512-yS+Q5i3hBf7GBkd4KG8a7eBNNWNGLTaEwwYWUijIYM7zrlYDM0BFXHjjPWlWZ1Rg7UaddZeIDmi9jF3HmqiQ2w==}
     engines: {node: '>=6.0.0'}
+
+  dotenv@16.6.1:
+    resolution: {integrity: sha512-uBq4egWHTcTt33a72vpSG0z3HnPuIl6NqYcTrKEg2azoEyl2hpW0zqlxysq2pK9HlDIHyHyakeYaYnSAwd8bow==}
+    engines: {node: '>=12'}
 
   electron-to-chromium@1.5.355:
     resolution: {integrity: sha512-LUPZhKzZPYSPme1jEYohpkA+ybYCJztr1quAdBd7E7h3+VOBVcKkwwtBJu41nrjawrRzfb8mtMfzWozoaK0ZIQ==}
@@ -1948,6 +2030,8 @@ snapshots:
   doctrine@3.0.0:
     dependencies:
       esutils: 2.0.3
+
+  dotenv@16.6.1: {}
 
   electron-to-chromium@1.5.355: {}
 
